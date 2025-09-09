@@ -69,33 +69,80 @@ export const searchIssues = async (
     )
 }
 
-export const fetchIssue = async (issueId: string, settings: Settings): Promise<Issue | null> => {
-    const issueResponse = await fetch(
-        buildUrl(settings, '/rest/api/2/search/', {
-            jql: `key="${issueId}"`,
-        }),
-        {
-            method: 'GET',
-            headers: authHeaders(settings),
-        },
-    )
-    if (!issueResponse.ok) {
-        throw new Error(
-            `Error fetching JIRA issue (${issueResponse.status} ${
-                issueResponse.statusText
-            }): ${await issueResponse.text()}`,
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+export const fetchIssue = async (
+    issueId: string,
+    settings: Settings,
+    attempt = 1
+): Promise<Issue | null> => {
+    const maxAttempts = 3
+
+    try {
+        const issueResponse = await fetch(
+            buildUrl(settings, '/rest/api/2/search/', {
+                jql: `key="${issueId}"`,
+                fields: 'key,summary,description,labels,subtasks'
+            }),
+            {
+                method: 'GET',
+                headers: authHeaders(settings),
+                // Add timeout to prevent hanging
+                signal: AbortSignal.timeout(10000) // 10 second timeout
+            }
         )
-    }
 
-    const responseJSON = (await issueResponse.json()) as { issues: Issue[] }
-    const issue = responseJSON.issues?.[0]
+        // Handle rate limiting and server errors
+        if (issueResponse.status === 429 || issueResponse.status >= 500) {
+            if (attempt < maxAttempts) {
+                const retryAfter = issueResponse.headers.get('Retry-After')
+                const waitTime = retryAfter
+                    ? parseInt(retryAfter) * 1000
+                    : Math.pow(2, attempt) * 1000 // exponential backoff: 2s, 4s, 8s
 
-    if (!issue) {
-        return null
-    }
+                console.warn(`Jira returned ${issueResponse.status} for ${issueId}, retrying in ${waitTime}ms...`)
+                await delay(waitTime)
+                return fetchIssue(issueId, settings, attempt + 1)
+            }
+        }
 
-    return {
-        ...issue,
-        url: buildUrl(settings, `/browse/${issue.key}`).toString(),
+        if (!issueResponse.ok) {
+            throw new Error(
+                `Error fetching JIRA issue (${issueResponse.status} ${
+                    issueResponse.statusText
+                }): ${await issueResponse.text()}`,
+            )
+        }
+
+        const responseJSON = (await issueResponse.json()) as { issues: Issue[] }
+        const issue = responseJSON.issues?.[0]
+
+        if (!issue && attempt < maxAttempts) {
+            // Sometimes Jira returns empty results under load, retry
+            console.warn(`No issue found for ${issueId}, retrying...`)
+            await delay(1000 * attempt)
+            return fetchIssue(issueId, settings, attempt + 1)
+        }
+
+        if (!issue) {
+            return null
+        }
+
+        return {
+            ...issue,
+            url: buildUrl(settings, `/browse/${issue.key}`).toString(),
+        }
+    } catch (error) {
+        if (attempt < maxAttempts) {
+            console.warn(`Error fetching ${issueId} (attempt ${attempt}):`, error)
+            await delay(Math.pow(2, attempt) * 1000)
+            return fetchIssue(issueId, settings, attempt + 1)
+        }
+        throw error
     }
 }
+
+
+
+
+

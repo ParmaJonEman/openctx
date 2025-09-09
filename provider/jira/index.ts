@@ -74,7 +74,7 @@ const jiraProvider: Provider = {
 
     async items(params: ItemsParams, settings: Settings): Promise<ItemsResult> {
         checkSettings(settings)
-
+        const rateLimiter = new RateLimiter(2) // Max 2 concurrent requests
         const key = (params.mention?.data as { key: string }).key
 
         const issue = await fetchIssue(key, settings)
@@ -90,16 +90,41 @@ const jiraProvider: Provider = {
 
         const childIssues = await Promise.all(
             subtasks.map(subtask =>
-                fetchIssue(subtask.key, settings).then(childIssue => {
-                    return childIssue ? issueToItem(childIssue) : null
-                }),
-            ),
+                rateLimiter.run(() =>
+                    fetchIssue(subtask.key, settings).then(childIssue => {
+                        return childIssue ? issueToItem(childIssue) : null
+                    })
+                )
+            )
         )
 
         const items = [issueToItem(issue), ...childIssues.filter((item): item is Item => item !== null)]
 
         return items
     },
+}
+
+// Add a simple rate limiter
+class RateLimiter {
+    private queue: (() => void)[] = []
+    private running = 0
+
+    constructor(private maxConcurrent: number) {}
+
+    async run<T>(fn: () => Promise<T>): Promise<T> {
+        while (this.running >= this.maxConcurrent) {
+            await new Promise<void>(resolve => this.queue.push(resolve))
+        }
+
+        this.running++
+        try {
+            return await fn()
+        } finally {
+            this.running--
+            const next = this.queue.shift()
+            if (next) next()
+        }
+    }
 }
 
 export default jiraProvider
