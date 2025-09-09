@@ -23,8 +23,8 @@
     "prepublishOnly": "tsc --build --clean && pnpm run build"
   },
   "dependencies": {
-    "@openctx/protocol": "workspace:*",
-    "@openctx/schema": "workspace:*",
+    "@openctx/protocol": "file:../../lib/protocol",
+    "@openctx/schema": "file:../../lib/schema",
     "picomatch": "^3.0.1"
   },
   "devDependencies": {

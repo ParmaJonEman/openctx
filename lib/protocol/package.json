@@ -23,7 +23,7 @@
     "prepublishOnly": "tsc --build --clean && pnpm run build"
   },
   "dependencies": {
-    "@openctx/schema": "workspace:*"
+    "@openctx/schema": "file:../../lib/schema"
   },
   "devDependencies": {
     "json-schema-to-typescript": "^13.1.2"
